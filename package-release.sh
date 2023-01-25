@@ -12,7 +12,7 @@ fi
 VKD3D_VERSION="$1"
 VKD3D_SRC_DIR=$(dirname "$(readlink -f "$0")")
 VKD3D_BUILD_DIR=$(realpath "$2")"/vkd3d-proton-$VKD3D_VERSION"
-VKD3D_ARCHIVE_PATH=$(realpath "$2")"/vkd3d-proton-$VKD3D_VERSION.tar.zst"
+VKD3D_ARCHIVE_PATH=$(realpath "$2")"/vkd3d-proton-$VKD3D_VERSION.tar.xz"
 
 if [ -e "$VKD3D_BUILD_DIR" ]; then
   echo "Build directory $VKD3D_BUILD_DIR already exists"
@@ -83,7 +83,7 @@ function build_script {
 
 function package {
   cd "$VKD3D_BUILD_DIR/.."
-  tar -caf "$VKD3D_ARCHIVE_PATH" "vkd3d-proton-$VKD3D_VERSION"
+  tar -cJf "$VKD3D_ARCHIVE_PATH" "vkd3d-proton-$VKD3D_VERSION"
   rm -R "vkd3d-proton-$VKD3D_VERSION"
 }
 
