@@ -56,7 +56,7 @@ function build_arch {
 
   cd "$VKD3D_SRC_DIR"
 
-  meson "$@"                           \
+  meson setup "$@"                     \
         --buildtype "${opt_buildtype}" \
         --prefix "$VKD3D_BUILD_DIR"    \
         $opt_strip                     \
@@ -71,8 +71,6 @@ function build_arch {
     if [ $opt_native -eq 0 ]; then
         # get rid of some useless .a files
         rm "$VKD3D_BUILD_DIR/x${arch}/"*.!(dll)
-        # get rid of vkd3d-proton-utils.dll
-        rm "$VKD3D_BUILD_DIR/x${arch}/libvkd3d-proton-utils-"*
     fi
     rm -R "$VKD3D_BUILD_DIR/build.${arch}"
   fi
@@ -85,7 +83,7 @@ function build_script {
 
 function package {
   cd "$VKD3D_BUILD_DIR/.."
-  tar -cf "$VKD3D_ARCHIVE_PATH" "vkd3d-proton-$VKD3D_VERSION"
+  tar -cJf "$VKD3D_ARCHIVE_PATH" "vkd3d-proton-$VKD3D_VERSION"
   rm -R "vkd3d-proton-$VKD3D_VERSION"
 }
 
