@@ -7,8 +7,9 @@ name: Mirror upstream release (.tar.xz)
 
 on:
   schedule:
-    # Daily. GitHub may delay scheduled runs a bit; that's fine here.
-    - cron: '17 4 * * *'
+    # Weekly; upstream releases are infrequent. GitHub may delay scheduled
+    # runs a bit, and workflow_dispatch is always available for manual runs.
+    - cron: '17 4 * * 1'
   workflow_dispatch:
     inputs:
       tag:
