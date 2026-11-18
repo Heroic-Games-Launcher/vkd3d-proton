@@ -1,9 +1,9 @@
 name: Mirror upstream release (.tar.xz)
 
-# HansKristian-Work/vkd3d-proton doesn't ship .tar.xz assets, and Heroic's
-# extractor expects one. This workflow rebuilds every new upstream release
-# and publishes a repackaged .tar.xz here, so Heroic's `releases/latest`
-# keeps working without manual steps.
+# HansKristian-Work/vkd3d-proton only ships .tar.zst assets, and Heroic's
+# extractor expects .tar.xz. This workflow repackages the official upstream
+# asset and publishes it here, so Heroic's `releases/latest` keeps working
+# without manual steps.
 
 on:
   schedule:
@@ -32,7 +32,7 @@ env:
 jobs:
   mirror:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 15
 
     steps:
       - name: Find latest upstream stable release
@@ -68,56 +68,54 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Checkout fork
+      - name: Checkout upstream tag
         if: steps.upstream.outputs.skip == 'false'
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          repository: ${{ env.UPSTREAM_REPO }}
+          ref: ${{ steps.upstream.outputs.tag }}
+          fetch-depth: 1
+          path: upstream
 
-      - name: Checkout upstream tag
+      - name: Repackage .tar.zst as .tar.xz
         if: steps.upstream.outputs.skip == 'false'
         env:
+          GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.upstream.outputs.tag }}
         run: |
           set -euo pipefail
 
-          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
-          git fetch upstream --tags --force
-          git checkout --detach "$TAG"
-          git submodule sync --recursive
-          git submodule update --init --recursive
-
-      # Build the unpacked tree, then package it ourselves as .tar.xz to
-      # avoid patching package-release.sh.
-      - name: Build
-        if: steps.upstream.outputs.skip == 'false'
-        env:
-          TAG: ${{ steps.upstream.outputs.tag }}
-        uses: Joshua-Ashton/arch-mingw-github-action@v8
-        with:
-          command: |
-            set -euo pipefail
-            ./package-release.sh "${TAG#v}" build --no-package
-
-      - name: Package .tar.xz
-        if: steps.upstream.outputs.skip == 'false'
-        env:
-          TAG: ${{ steps.upstream.outputs.tag }}
-        run: |
-          set -euo pipefail
+          command -v zstd >/dev/null || {
+            sudo apt-get update
+            sudo apt-get install -y zstd
+          }
 
           version="${TAG#v}"
-          mkdir -p dist
-          tar -cJf "dist/vkd3d-proton-${version}.tar.xz" \
-            -C build "vkd3d-proton-${version}"
+          mkdir -p downloaded extracted dist
 
-      - name: Tag the upstream commit
+          gh release download "$TAG" \
+            --repo "$UPSTREAM_REPO" \
+            --pattern "vkd3d-proton-${version}.tar.zst" \
+            --dir downloaded
+
+          archive="downloaded/vkd3d-proton-${version}.tar.zst"
+          test -f "$archive"
+
+          tar --zstd -xf "$archive" -C extracted
+          tar -cJf "dist/vkd3d-proton-${version}.tar.xz" \
+            -C extracted "vkd3d-proton-${version}"
+
+      - name: Push tag to fork
         if: steps.upstream.outputs.skip == 'false'
         env:
+          GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.upstream.outputs.tag }}
         run: |
           set -euo pipefail
-          git push origin "refs/tags/${TAG}" --force
+          cd upstream
+          git push \
+            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            "HEAD:refs/tags/${TAG}" --force
 
       - name: Publish release
         if: steps.upstream.outputs.skip == 'false'
@@ -129,7 +127,6 @@ jobs:
 
           version="${TAG#v}"
           asset="dist/vkd3d-proton-${version}.tar.xz"
-
           test -f "$asset"
 
           gh release create "$TAG" "$asset" \
@@ -137,16 +134,3 @@ jobs:
             --title "$TAG" \
             --notes "Automated mirror of ${UPSTREAM_REPO} ${TAG}, repackaged as .tar.xz for Heroic's tool installer." \
             --verify-tag
-
-      # Keep master in sync and the repository active (scheduled workflows are
-      # disabled after 60 days without repository activity).
-      - name: Sync master (best effort)
-        if: steps.upstream.outputs.skip == 'false'
-        continue-on-error: true
-        env:
-          TAG: ${{ steps.upstream.outputs.tag }}
-        run: |
-          set -euo pipefail
-          git checkout master
-          git merge --no-edit "$TAG"
-          git push origin master
