@@ -68,15 +68,6 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Checkout upstream tag
-        if: steps.upstream.outputs.skip == 'false'
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.UPSTREAM_REPO }}
-          ref: ${{ steps.upstream.outputs.tag }}
-          fetch-depth: 1
-          path: upstream
-
       - name: Repackage .tar.zst as .tar.xz
         if: steps.upstream.outputs.skip == 'false'
         env:
@@ -105,18 +96,6 @@ jobs:
           tar -cJf "dist/vkd3d-proton-${version}.tar.xz" \
             -C extracted "vkd3d-proton-${version}"
 
-      - name: Push tag to fork
-        if: steps.upstream.outputs.skip == 'false'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.upstream.outputs.tag }}
-        run: |
-          set -euo pipefail
-          cd upstream
-          git push \
-            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
-            "HEAD:refs/tags/${TAG}" --force
-
       - name: Publish release
         if: steps.upstream.outputs.skip == 'false'
         env:
@@ -131,6 +110,6 @@ jobs:
 
           gh release create "$TAG" "$asset" \
             --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
             --title "$TAG" \
-            --notes "Automated mirror of ${UPSTREAM_REPO} ${TAG}, repackaged as .tar.xz for Heroic's tool installer." \
-            --verify-tag
+            --notes "Automated mirror of ${UPSTREAM_REPO} ${TAG}, repackaged as .tar.xz for Heroic's tool installer."
