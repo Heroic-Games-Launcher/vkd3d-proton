@@ -1,0 +1,152 @@
+name: Mirror upstream release (.tar.xz)
+
+# HansKristian-Work/vkd3d-proton doesn't ship .tar.xz assets, and Heroic's
+# extractor expects one. This workflow rebuilds every new upstream release
+# and publishes a repackaged .tar.xz here, so Heroic's `releases/latest`
+# keeps working without manual steps.
+
+on:
+  schedule:
+    # Daily. GitHub may delay scheduled runs a bit; that's fine here.
+    - cron: '17 4 * * *'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Upstream tag to mirror (leave empty for the latest stable release)'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mirror-upstream-release
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: HansKristian-Work/vkd3d-proton
+  # Optional: pin to a major version (for example "2") so the automation
+  # doesn't jump to 3.x. Leave empty to always mirror the latest release.
+  ALLOWED_MAJOR: ''
+
+jobs:
+  mirror:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Find latest upstream stable release
+        id: upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+
+          override="${INPUT_TAG}"
+          if [ -n "$override" ]; then
+            tag="$override"
+          elif [ -n "${ALLOWED_MAJOR}" ]; then
+            tag=$(gh api "repos/${UPSTREAM_REPO}/releases" --paginate \
+              --jq '.[] | select(.draft == false and .prerelease == false) | .tag_name' \
+              | grep -E "^v${ALLOWED_MAJOR}\." | head -n1 || true)
+          else
+            tag=$(gh api "repos/${UPSTREAM_REPO}/releases/latest" --jq '.tag_name')
+          fi
+
+          if [ -z "$tag" ] || [ "$tag" = "null" ]; then
+            echo "No matching stable upstream release found."
+            exit 1
+          fi
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $tag already exists in $GITHUB_REPOSITORY, nothing to do."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout fork
+        if: steps.upstream.outputs.skip == 'false'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout upstream tag
+        if: steps.upstream.outputs.skip == 'false'
+        env:
+          TAG: ${{ steps.upstream.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git fetch upstream --tags --force
+          git checkout --detach "$TAG"
+          git submodule sync --recursive
+          git submodule update --init --recursive
+
+      # Build the unpacked tree, then package it ourselves as .tar.xz to
+      # avoid patching package-release.sh.
+      - name: Build
+        if: steps.upstream.outputs.skip == 'false'
+        env:
+          TAG: ${{ steps.upstream.outputs.tag }}
+        uses: Joshua-Ashton/arch-mingw-github-action@v8
+        with:
+          command: |
+            set -euo pipefail
+            ./package-release.sh "${TAG#v}" build --no-package
+
+      - name: Package .tar.xz
+        if: steps.upstream.outputs.skip == 'false'
+        env:
+          TAG: ${{ steps.upstream.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          version="${TAG#v}"
+          mkdir -p dist
+          tar -cJf "dist/vkd3d-proton-${version}.tar.xz" \
+            -C build "vkd3d-proton-${version}"
+
+      - name: Tag the upstream commit
+        if: steps.upstream.outputs.skip == 'false'
+        env:
+          TAG: ${{ steps.upstream.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git push origin "refs/tags/${TAG}" --force
+
+      - name: Publish release
+        if: steps.upstream.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.upstream.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          version="${TAG#v}"
+          asset="dist/vkd3d-proton-${version}.tar.xz"
+
+          test -f "$asset"
+
+          gh release create "$TAG" "$asset" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$TAG" \
+            --notes "Automated mirror of ${UPSTREAM_REPO} ${TAG}, repackaged as .tar.xz for Heroic's tool installer." \
+            --verify-tag
+
+      # Keep master in sync and the repository active (scheduled workflows are
+      # disabled after 60 days without repository activity).
+      - name: Sync master (best effort)
+        if: steps.upstream.outputs.skip == 'false'
+        continue-on-error: true
+        env:
+          TAG: ${{ steps.upstream.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git checkout master
+          git merge --no-edit "$TAG"
+          git push origin master
